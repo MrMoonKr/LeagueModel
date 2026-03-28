@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "LeagueModel (Debug)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "preLaunchTask": "CMake: Configure + Build Debug",
+      "program": "${workspaceFolder}/bin/Debug/LeagueModel.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "console": "integratedTerminal"
+    }
+  ]
+}

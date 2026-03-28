@@ -2,6 +2,8 @@
 #include <league_lib/wad/wad_filesystem.hpp>
 #include <stb_image.h>
 #include <filesystem>
+#include <fstream>
+#include <string>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
@@ -32,6 +34,8 @@ namespace LeagueModel
 	}
 }
 
+void MountDir(const char* wadPath);
+
 static struct
 {
 	AnimatedMeshParametersVS_t parameters;
@@ -46,11 +50,10 @@ static struct
 	std::vector<const u8*> icons;
 	ImGuiID dockSpaceID = 0;
 } state;
+static std::string gameRootPath;
 
 static void Init()
 {
-	state.character.Load("aatrox", 0);
-
 	sg_desc desc = {};
 	desc.context = sapp_sgcontext();
 	desc.logger.func = slog_func;
@@ -76,6 +79,15 @@ static void Init()
 	// default pass action
 	state.pass_action.colors[0].load_action = SG_LOADACTION_CLEAR;
 	state.pass_action.colors[0].clear_value = { 0.25f, 0.5f, 0.75f, 0.0f };
+
+	if (!gameRootPath.empty() && fs::exists(gameRootPath))
+		MountDir(gameRootPath.c_str());
+
+	fs::path localDirectory = fs::current_path();
+	if (fs::exists(localDirectory))
+		MountDir(localDirectory.string().c_str());
+
+	state.character.Load("aatrox", 0);
 }
 
 void RenderCharacter()
@@ -255,7 +267,24 @@ void LoadIcon(sapp_image_desc& desc, const u8* data, size_t size)
 
 void MountDir(const char* wadPath)
 {
-	for (auto& p : fs::recursive_directory_iterator(wadPath))
+	if (wadPath == nullptr || !fs::exists(wadPath))
+		return;
+
+	const fs::path rootPath = wadPath;
+	if (fs::is_regular_file(rootPath) && rootPath.filename() == "DATA.wad.client")
+	{
+		Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.parent_path().string().c_str());
+		return;
+	}
+
+	const fs::path directWadPath = rootPath / "DATA.wad.client";
+	if (fs::exists(directWadPath) && fs::is_regular_file(directWadPath))
+	{
+		Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.string().c_str());
+		return;
+	}
+
+	for (auto& p : fs::recursive_directory_iterator(rootPath))
 	{
 		if (!p.is_regular_file())
 			continue;
@@ -268,16 +297,83 @@ void MountDir(const char* wadPath)
 	}
 }
 
+static std::string Trim(const std::string& value)
+{
+	const size_t start = value.find_first_not_of(" \t\r\n");
+	if (start == std::string::npos)
+		return "";
+
+	const size_t end = value.find_last_not_of(" \t\r\n");
+	return value.substr(start, end - start + 1);
+}
+
+static std::string Unquote(const std::string& value)
+{
+	if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
+		return value.substr(1, value.size() - 2);
+
+	return value;
+}
+
+static std::string ReadConfigRoot(const fs::path& configPath)
+{
+	std::ifstream configFile(configPath);
+	if (!configFile.is_open())
+		return "";
+
+	std::string line;
+	while (std::getline(configFile, line))
+	{
+		const std::string trimmedLine = Trim(line);
+		if (trimmedLine.empty() || trimmedLine[0] == '#' || trimmedLine[0] == ';')
+			continue;
+
+		const size_t delimiterPos = trimmedLine.find('=');
+		if (delimiterPos == std::string::npos)
+			continue;
+
+		const std::string key = Trim(trimmedLine.substr(0, delimiterPos));
+		if (key != "root")
+			continue;
+
+		return Unquote(Trim(trimmedLine.substr(delimiterPos + 1)));
+	}
+
+	return "";
+}
+
+static std::string ResolveGameRoot(int argc, char* argv[])
+{
+	if (argc > 1 && fs::exists(argv[1]))
+		return argv[1];
+
+	constexpr const char* defaultRoot = "C:/Riot Games/League of Legends/Game/DATA/FINAL";
+
+	std::vector<fs::path> configPaths;
+	if (argc > 0 && argv[0] != nullptr)
+	{
+		const fs::path executableConfigPath = fs::path(argv[0]).parent_path() / "config.ini";
+		configPaths.push_back(executableConfigPath);
+	}
+
+	const fs::path workingDirectoryConfigPath = fs::current_path() / "config.ini";
+	if (configPaths.empty() || configPaths.front() != workingDirectoryConfigPath)
+		configPaths.push_back(workingDirectoryConfigPath);
+
+	for (const fs::path& configPath : configPaths)
+	{
+		const std::string configuredRoot = ReadConfigRoot(configPath);
+		if (!configuredRoot.empty() && fs::exists(configuredRoot))
+			return configuredRoot;
+	}
+
+	return defaultRoot;
+}
+
 sapp_desc sokol_main(int argc, char* argv[])
 {
-	// Load current working directory and default or argument path
-	const char* argumentDirectory = argc <= 1 ? "C:/Riot Games/League of Legends/Game/DATA/FINAL" : argv[1];
-	if (fs::exists(argumentDirectory))
-		MountDir(argumentDirectory);
-
-	fs::path localDirectory = fs::current_path();
-	if (fs::exists(localDirectory))
-		MountDir(localDirectory.string().c_str());
+	// Load command line root first, then config.ini, then the built-in default.
+	gameRootPath = ResolveGameRoot(argc, argv);
 
 	sapp_desc appDesc = {};
 	appDesc.init_cb = Init;

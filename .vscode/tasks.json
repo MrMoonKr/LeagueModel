@@ -1,0 +1,47 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "CMake: Configure VS2022 x64",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--preset",
+        "vs2022-x64"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "CMake: Build Debug",
+      "type": "process",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "--preset",
+        "debug"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "CMake: Configure + Build Debug",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "CMake: Configure VS2022 x64",
+        "CMake: Build Debug"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

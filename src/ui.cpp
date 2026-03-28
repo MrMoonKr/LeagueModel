@@ -1,11 +1,13 @@
 #include "ui.hpp"
 #include "character.hpp"
+#include "managed_image.hpp"
 
 #include <string>
 #include <cassert>
 #include <thread>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <imgui.h>
 #include <json.hpp>
 
@@ -37,6 +39,142 @@ namespace LeagueModel
 
 	static const fs::path cachePath = fs::current_path() / "cache";
 	static const fs::path championCacheFile = cachePath / "champions.json";
+
+	struct LoadingProgress
+	{
+		bool active = false;
+		float progress = 0.0f;
+		std::string phase;
+	};
+
+	static bool IsCharacterLoadStarted(const Character& character)
+	{
+		return character.loadState != CharacterLoadState::NotLoaded ||
+			   character.globalTexture != nullptr ||
+			   !character.textures.empty() ||
+			   character.skin.loadState != Spek::File::LoadState::NotLoaded ||
+			   character.skeleton.state != Spek::File::LoadState::NotLoaded;
+	}
+
+	static bool IsFlagSet(const Character& character, CharacterLoadState state)
+	{
+		return (character.loadState & state) != 0;
+	}
+
+	static LoadingProgress GetCharacterLoadingProgress(const Character& character)
+	{
+		LoadingProgress result = {};
+		if (!IsCharacterLoadStarted(character))
+			return result;
+
+		if ((character.loadState & CharacterLoadState::FailedBitSet) != 0)
+		{
+			result.active = true;
+			result.progress = 1.0f;
+			result.phase = "Load failed";
+			return result;
+		}
+
+		float completedWeight = 0.0f;
+		float totalWeight = 0.0f;
+		auto addStep = [&](bool done, float weight)
+		{
+			totalWeight += weight;
+			if (done)
+				completedWeight += weight;
+		};
+
+		addStep(IsFlagSet(character, CharacterLoadState::SkinLoaded) || IsFlagSet(character, CharacterLoadState::SkinFailed), 1.0f);
+		addStep(IsFlagSet(character, CharacterLoadState::SkeletonLoaded) || IsFlagSet(character, CharacterLoadState::SkeletonFailed), 1.0f);
+		addStep(IsFlagSet(character, CharacterLoadState::GraphLoaded) || IsFlagSet(character, CharacterLoadState::GraphFailed), 1.0f);
+		addStep(IsFlagSet(character, CharacterLoadState::SkeletonApplied), 0.75f);
+		addStep(IsFlagSet(character, CharacterLoadState::MaterialApplied), 0.75f);
+		addStep(IsFlagSet(character, CharacterLoadState::InfoLoadCompleted), 1.0f);
+		addStep(IsFlagSet(character, CharacterLoadState::MeshGenCompleted), 1.5f);
+		addStep(IsFlagSet(character, CharacterLoadState::CallbackCompleted), 0.5f);
+
+		size_t textureCount = character.textures.size() + (character.globalTexture ? 1 : 0);
+		if (textureCount > 0)
+		{
+			size_t resolvedTextureCount = 0;
+			auto isTextureResolved = [](const std::shared_ptr<ManagedImage>& image)
+			{
+				return image == nullptr || image->loadState != Spek::File::LoadState::NotLoaded;
+			};
+
+			if (isTextureResolved(character.globalTexture))
+				resolvedTextureCount++;
+
+			for (const auto& texture : character.textures)
+				if (isTextureResolved(texture.second))
+					resolvedTextureCount++;
+
+			const float textureWeight = 1.5f;
+			totalWeight += textureWeight;
+			completedWeight += textureWeight * (static_cast<float>(resolvedTextureCount) / static_cast<float>(textureCount));
+		}
+
+		result.active = (character.loadState & CharacterLoadState::Loaded) != CharacterLoadState::Loaded;
+		result.progress = totalWeight > 0.0f ? std::clamp(completedWeight / totalWeight, 0.0f, 1.0f) : 0.0f;
+
+		if (!IsFlagSet(character, CharacterLoadState::SkinLoaded) && !IsFlagSet(character, CharacterLoadState::SkinFailed))
+			result.phase = "Loading skin";
+		else if (!IsFlagSet(character, CharacterLoadState::SkeletonLoaded) && !IsFlagSet(character, CharacterLoadState::SkeletonFailed))
+			result.phase = "Loading skeleton";
+		else if (!IsFlagSet(character, CharacterLoadState::GraphLoaded) && !IsFlagSet(character, CharacterLoadState::GraphFailed))
+			result.phase = "Loading animation graph";
+		else if (!IsFlagSet(character, CharacterLoadState::SkeletonApplied))
+			result.phase = "Applying skeleton";
+		else if (!IsFlagSet(character, CharacterLoadState::MaterialApplied))
+			result.phase = "Applying materials";
+		else if (!IsFlagSet(character, CharacterLoadState::InfoLoadCompleted))
+			result.phase = "Preparing mesh data";
+		else if (!IsFlagSet(character, CharacterLoadState::MeshGenCompleted))
+			result.phase = "Uploading mesh";
+		else if (!IsFlagSet(character, CharacterLoadState::CallbackCompleted))
+			result.phase = "Finalizing";
+		else
+			result.phase = "Ready";
+
+		return result;
+	}
+
+	static void RenderLoadingOverlay(const Character& character)
+	{
+		const LoadingProgress characterProgress = GetCharacterLoadingProgress(character);
+		const bool showChampionLoading = !g_ui.initialised;
+		if (!showChampionLoading && !characterProgress.active)
+			return;
+
+		ImGuiViewport* viewport = ImGui::GetMainViewport();
+		ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+		ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
+		ImGui::SetNextWindowBgAlpha(0.9f);
+
+		ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+								 ImGuiWindowFlags_NoDocking |
+								 ImGuiWindowFlags_NoMove |
+								 ImGuiWindowFlags_NoSavedSettings |
+								 ImGuiWindowFlags_NoNav;
+		if (ImGui::Begin("LoadingOverlay", nullptr, flags))
+		{
+			if (characterProgress.active)
+			{
+				const int percent = static_cast<int>(characterProgress.progress * 100.0f + 0.5f);
+				ImGui::TextUnformatted(characterProgress.phase.c_str());
+				ImGui::ProgressBar(characterProgress.progress, ImVec2(-1.0f, 0.0f));
+				ImGui::Text("Character loading: %d%%", percent);
+			}
+
+			if (showChampionLoading)
+			{
+				if (characterProgress.active)
+					ImGui::Separator();
+				ImGui::TextUnformatted("Loading champion list...");
+			}
+		}
+		ImGui::End();
+	}
 
 	static void RequestChampionList()
 	{
@@ -219,9 +357,7 @@ namespace LeagueModel
 
 			g_ui.initialisationStarted = true;
 		}
-
-		if (!g_ui.initialised)
-			return;
+		const LoadingProgress characterProgress = GetCharacterLoadingProgress(character);
 
 		if (ImGui::BeginMainMenuBar())
 		{
@@ -235,11 +371,27 @@ namespace LeagueModel
 				ImGui::EndMenu();
 			}
 
+			if (characterProgress.active)
+			{
+				ImGui::Separator();
+				ImGui::Text("Loading %d%%", static_cast<int>(characterProgress.progress * 100.0f + 0.5f));
+			}
+			else if (!g_ui.initialised)
+			{
+				ImGui::Separator();
+				ImGui::TextUnformatted("Loading champion list...");
+			}
+
 			ImGui::TextColored(ImVec4(1, 1, 1, 0.4), "FPS: %.1f", ImGui::GetIO().Framerate);
 			ImGui::EndMainMenuBar();
 		}
 
-		RenderSkinsWindow(character);
-		RenderAnimationsWindow(character);
+		if (g_ui.initialised)
+		{
+			RenderSkinsWindow(character);
+			RenderAnimationsWindow(character);
+		}
+
+		RenderLoadingOverlay(character);
 	}
 }
