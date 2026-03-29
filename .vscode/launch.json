@@ -2,7 +2,15 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "LeagueModel (Debug)",
+      "name": "[Debug] wad_explorer.py",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/wad_browser.py",
+      "console": "integratedTerminal",
+      "args": ""
+    },
+    {
+      "name": "[Debug] LeagueModel.exe",
       "type": "cppvsdbg",
       "request": "launch",
       "preLaunchTask": "CMake: Configure + Build Debug",

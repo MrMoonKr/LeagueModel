@@ -5,11 +5,9 @@
 #include "animation.hpp"
 #include "animation_graph.hpp"
 #include "character_animation.hpp"
+#include "render/character_pose.hpp"
 
-#include <sokol_gfx.h>
 #include <league_lib/bin/bin.hpp>
-
-struct AnimatedMeshParametersVS_t;
 
 namespace LeagueModel
 {
@@ -35,12 +33,9 @@ namespace LeagueModel
 		Loaded = InfoLoadCompleted | MeshGenCompleted | CallbackCompleted | SkinLoaded | GraphLoaded | SkeletonLoaded | SkeletonApplied | MaterialApplied,
 	};
 
-	struct SokolMesh
+	struct MeshRenderState
 	{
-		~SokolMesh();
-
-		sg_bindings bindings = {};
-		u32 indexCount = 0;
+		u32 hash = 0;
 		bool shouldRender = false;
 	};
 
@@ -68,9 +63,8 @@ namespace LeagueModel
 		f32 lastFrame = -1;
 		f32 currentTime = 0;
 
-		std::vector<SokolMesh> meshes;
-		std::unordered_map<u32, SokolMesh*> meshMap;
-		sg_pipeline pipeline;
+		std::vector<MeshRenderState> meshes;
+		std::unordered_map<u32, MeshRenderState*> meshMap;
 
 		std::map<std::string, std::shared_ptr<Animation>> animations;
 		std::unordered_map<std::string, AnimationClipBaseData*> clipMap;
@@ -87,7 +81,7 @@ namespace LeagueModel
 		void PlayAnimation(const char* animationName);
 		void PlayAnimation(const Animation& animation);
 
-		void Update(AnimatedMeshParametersVS_t& args);
+		void Update(CharacterPose& pose);
 
 	private:
 		Spek::File::Handle file;

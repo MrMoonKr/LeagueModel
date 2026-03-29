@@ -1,0 +1,39 @@
+# Rest Client for Visual Studio Code 
+# https://marketplace.visualstudio.com/items?itemName=humao.rest-client
+# 확장 프로그램 설치 후 사용 가능
+
+### 확장 프로그램 테스트용
+GET https://www.google.co.kr
+
+###
+###GET https://ddragon.leagueoflegends.com/cdn/dragontail-10.10.5.zip
+
+### versions.json
+### "16.6.1" ( current )
+GET https://ddragon.leagueoflegends.com/api/versions.json
+
+### languages.json
+### "ko_KR", ...
+GET https://ddragon.leagueoflegends.com/cdn/languages.json
+
+
+### champion.json
+
+### ko_KR
+GET https://ddragon.leagueoflegends.com/cdn/16.6.1/data/ko_KR/champion.json
+
+### en_US
+GET https://ddragon.leagueoflegends.com/cdn/16.6.1/data/en_US/champion.json
+
+### ko_KR
+GET https://ddragon.leagueoflegends.com/cdn/15.3.1/data/ko_KR/champion.json
+
+
+### Aatrox
+GET https://ddragon.leagueoflegends.com/cdn/16.6.1/data/ko_KR/champion/Aatrox.json
+
+###
+GET https://ddragon.leagueoflegends.com/cdn/15.3.1/data/ko_KR/champion/Akshan.json
+
+### item.json
+GET https://ddragon.leagueoflegends.com/cdn/15.3.1/data/ko_KR/item.json

@@ -8,6 +8,34 @@
 
 namespace LeagueModel
 {
+	namespace
+	{
+		GLuint CreateTexture2D(const u8* pixelData, int imageWidth, int imageHeight, int bytesPerPixel)
+		{
+			GLuint textureId = 0;
+			glGenTextures(1, &textureId);
+			glBindTexture(GL_TEXTURE_2D, textureId);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+			glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+			const GLenum format = bytesPerPixel == 4 ? GL_RGBA : (bytesPerPixel == 3 ? GL_RGB : GL_RED);
+			const GLint internalFormat = bytesPerPixel == 4 ? GL_RGBA8 : (bytesPerPixel == 3 ? GL_RGB8 : GL_R8);
+			glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, imageWidth, imageHeight, 0, format, GL_UNSIGNED_BYTE, pixelData);
+			glGenerateMipmap(GL_TEXTURE_2D);
+			glBindTexture(GL_TEXTURE_2D, 0);
+			return textureId;
+		}
+
+		GLuint CreateFallbackTexture()
+		{
+			const u8 blackPixel[4] = { 0, 0, 0, 255 };
+			return CreateTexture2D(blackPixel, 1, 1, 4);
+		}
+	}
+
 #pragma pack(push, 1)
 	struct TexHeader
 	{
@@ -32,15 +60,9 @@ namespace LeagueModel
 				printf("Failed to load image %s.\n", fileName.c_str());
 				loadState = Spek::File::LoadState::FailedToLoad;
 
-				// TODO: Do something better than create a 1x1 black image.
-				const u8 imageData[4] = { 0, 0, 0, 255 };
-				sg_image_desc imageDesc = {};
-				imageDesc.width = 1;
-				imageDesc.height = 1;
-				imageDesc.pixel_format = SG_PIXELFORMAT_RGBA8;
-				imageDesc.data.subimage[0][0].ptr = imageData;
-				imageDesc.data.subimage[0][0].size = 4;
-				image = sg_make_image(imageDesc);
+				if (textureId != 0)
+					glDeleteTextures(1, &textureId);
+				textureId = CreateFallbackTexture();
 
 				if (onImageLoaded)
 					onImageLoaded(*this);
@@ -164,24 +186,17 @@ namespace LeagueModel
 			if (imageData == nullptr)
 			{
 				loadState = Spek::File::LoadState::FailedToLoad;
+				if (textureId != 0)
+					glDeleteTextures(1, &textureId);
+				textureId = CreateFallbackTexture();
 				if (onImageLoaded)
 					onImageLoaded(*this);
 				return;
 			}
 
-			if (image.id != SG_INVALID_ID)
-			{
-				sg_destroy_image(image);
-				image.id = SG_INVALID_ID;
-			}
-
-			sg_image_desc imageDesc = {};
-			imageDesc.width = imageWidth;
-			imageDesc.height = imageHeight;
-			imageDesc.pixel_format = bytesPerPixel == 4 ? SG_PIXELFORMAT_RGBA8 : SG_PIXELFORMAT_R8;
-			imageDesc.data.subimage[0][0].ptr = imageData;
-			imageDesc.data.subimage[0][0].size = (size_t)imageWidth * (size_t)imageHeight * bytesPerPixel;
-			image = sg_make_image(imageDesc);
+			if (textureId != 0)
+				glDeleteTextures(1, &textureId);
+			textureId = CreateTexture2D(imageData, imageWidth, imageHeight, bytesPerPixel);
 
 			if (isDDS == false)
 				stbi_image_free(imageData);
@@ -193,10 +208,7 @@ namespace LeagueModel
 
 	ManagedImage::~ManagedImage()
 	{
-		if (image.id != SG_INVALID_ID)
-		{
-			sg_destroy_image(image);
-			image.id = SG_INVALID_ID;
-		}
+		if (textureId != 0)
+			glDeleteTextures(1, &textureId);
 	}
 }

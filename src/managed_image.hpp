@@ -1,7 +1,7 @@
 #pragma once
 
 #include <spek/file/file.hpp>
-#include <sokol_gfx.h>
+#include <glad/glad.h>
 #include <functional>
 
 namespace LeagueModel
@@ -12,7 +12,7 @@ namespace LeagueModel
 		ManagedImage(const char* path, OnLoadFunction onImageLoaded = nullptr);
 		~ManagedImage();
 
-		sg_image image = {};
+		GLuint textureId = 0;
 		Spek::File::LoadState loadState = Spek::File::LoadState::NotLoaded;
 
 	private:

@@ -12,14 +12,12 @@
 #include <algorithm>
 #include <set>
 
-#include "shaders/animated_mesh.hpp"
-
 namespace LeagueModel
 {
 	using namespace Spek;
 	static std::unordered_map<std::string, LeagueLib::Bin> g_bins;
 
-	constexpr size_t g_shaderBoneCount = sizeof(decltype(AnimatedMeshParametersVS_t::bones)) / sizeof(decltype(AnimatedMeshParametersVS_t::bones[0]));
+	constexpr size_t g_shaderBoneCount = kMaxShaderBones;
 
 	void LoadAnimation(Character& character, const std::string& inAnimationPath, Animation::OnLoadFunction onAnimationLoaded);
 
@@ -415,56 +413,14 @@ namespace LeagueModel
 				return;
 		}
 
-		auto& meshes = character.skin.meshes;
-		sg_sampler_desc samplerDesc = {};
-		samplerDesc.min_filter = SG_FILTER_LINEAR;
-		samplerDesc.mag_filter = SG_FILTER_LINEAR;
-		samplerDesc.mipmap_filter = SG_FILTER_LINEAR;
-		samplerDesc.wrap_u = SG_WRAP_REPEAT;
-		samplerDesc.wrap_v = SG_WRAP_REPEAT;
-		sg_sampler sampler = sg_make_sampler(samplerDesc);
-
-		sg_pipeline_desc pipelineDesc = {};
-		pipelineDesc.layout.attrs[ATTR_AnimatedMeshVS_pos].format = SG_VERTEXFORMAT_FLOAT3;
-		pipelineDesc.layout.attrs[ATTR_AnimatedMeshVS_uvs].format = SG_VERTEXFORMAT_FLOAT2;
-		pipelineDesc.layout.attrs[ATTR_AnimatedMeshVS_normals].format = SG_VERTEXFORMAT_FLOAT3;
-		pipelineDesc.layout.attrs[ATTR_AnimatedMeshVS_boneIndices].format = SG_VERTEXFORMAT_FLOAT4;
-		pipelineDesc.layout.attrs[ATTR_AnimatedMeshVS_boneWeights].format = SG_VERTEXFORMAT_FLOAT4;
-
-		pipelineDesc.shader = sg_make_shader(AnimatedMesh_shader_desc(sg_query_backend()));
-		pipelineDesc.index_type = SG_INDEXTYPE_UINT16;
-		pipelineDesc.cull_mode = SG_CULLMODE_FRONT;
-		pipelineDesc.depth.compare = SG_COMPAREFUNC_LESS_EQUAL;
-		pipelineDesc.depth.write_enabled = true;
-
-		character.pipeline = sg_make_pipeline(pipelineDesc);
-
-		for (const auto& sourceMesh : meshes)
+		character.meshes.clear();
+		character.meshMap.clear();
+		for (const Skin::Mesh& sourceMesh : character.skin.meshes)
 		{
-			sg_bindings bind = {};
-
-			sg_buffer_desc indexBufferDesc = {};
-			indexBufferDesc.type = SG_BUFFERTYPE_INDEXBUFFER;
-			indexBufferDesc.data.size = sourceMesh.indexCount * sizeof(u16);
-			indexBufferDesc.data.ptr = sourceMesh.indices;
-			bind.index_buffer = sg_make_buffer(indexBufferDesc);
-
-			if (character.textures.find(sourceMesh.hash) != character.textures.end())
-				bind.fs.images[SLOT_diffuseTexture] = character.textures[sourceMesh.hash]->image;
-			else
-				bind.fs.images[SLOT_diffuseTexture] = character.globalTexture->image;
-			bind.fs.samplers[SLOT_diffuseSampler] = sampler;
-
-			sg_buffer_desc vertexBufferDesc = {};
-			vertexBufferDesc.type = SG_BUFFERTYPE_VERTEXBUFFER;
-			vertexBufferDesc.data.size = character.skin.vertices.size() * sizeof(Skin::Vertex);
-			vertexBufferDesc.data.ptr = character.skin.vertices.data();
-			bind.vertex_buffers[0] = sg_make_buffer(vertexBufferDesc);
-
 			auto& mesh = character.meshes.emplace_back();
-			mesh.bindings = bind;
-			mesh.indexCount = sourceMesh.indexCount;
+			mesh.hash = sourceMesh.hash;
 			mesh.shouldRender = sourceMesh.initialVisibility;
+			character.meshMap[sourceMesh.hash] = &mesh;
 		}
 
 		(u64&)character.loadState |= CharacterLoadState::MeshGenCompleted;
@@ -516,8 +472,6 @@ namespace LeagueModel
 
 		meshes.clear();
 		meshMap.clear();
-		if (sg_isvalid())
-			sg_destroy_pipeline(pipeline);
 
 		animations.clear();
 		clipMap.clear();
@@ -600,8 +554,11 @@ namespace LeagueModel
 		}
 	}
 
-	void Character::Update(AnimatedMeshParametersVS_t& args)
+	void Character::Update(CharacterPose& pose)
 	{
+		const glm::mat4 identity = glm::identity<glm::mat4>();
+		pose.bones.fill(identity);
+
 		if (currentAnimation != nullptr && currentTime >= currentAnimation->duration)
 			currentTime -= currentAnimation->duration;
 
@@ -624,7 +581,7 @@ namespace LeagueModel
 
 		for (const auto& bone : skeleton.bones)
 			if (bone.parent == nullptr)
-				SetupHierarchy(*this, args.bones, bone, glm::identity<glm::mat4>());
+				SetupHierarchy(*this, pose.bones.data(), bone, glm::identity<glm::mat4>());
 
 		lastFrame = currentFrame; // TODO: Add resetting
 	}
@@ -632,10 +589,5 @@ namespace LeagueModel
 	Character::~Character()
 	{
 		Reset();
-	}
-
-	SokolMesh::~SokolMesh()
-	{
-		bindings = {};
 	}
 }
