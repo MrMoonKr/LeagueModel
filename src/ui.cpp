@@ -1,9 +1,11 @@
 #include "ui.hpp"
 #include "character.hpp"
-#include "managed_image.hpp"
 
 #include <string>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <thread>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +20,8 @@
 #elif defined(__EMSCRIPTEN__)
 	#include <emscripten/fetch.h>
 #endif
+
+#include "managed_image.hpp"
 
 namespace LeagueModel
 {
@@ -323,7 +327,7 @@ namespace LeagueModel
 
 	void RenderAnimationsWindow(Character& character)
 	{
-		if (g_ui.skinsWindowOpen && ImGui::Begin("Animations", &g_ui.skinsWindowOpen))
+		if (g_ui.animationWindowOpen && ImGui::Begin("Animations", &g_ui.animationWindowOpen))
 		{
 			ImGui::InputText("Filter", g_ui.animationWindowFilter, sizeof(g_ui.animationWindowFilter));
 			if (ImGui::SmallButton("Clear Filter"))
@@ -339,8 +343,8 @@ namespace LeagueModel
 				if (g_ui.animationWindowFilter[0] != '\0' && animationName.find(g_ui.animationWindowFilter) == std::string::npos)
 					continue;
 
-				const char* nameStart = strrchr(animationName.c_str(), '/') + 1;
-				assert((u64)nameStart > 1);
+				const char* nameStart = strrchr(animationName.c_str(), '/');
+				nameStart = nameStart ? nameStart + 1 : animationName.c_str();
 				if (ImGui::Button(nameStart))
 					character.PlayAnimation(animation);
 			}
@@ -368,6 +372,7 @@ namespace LeagueModel
 			if (ImGui::BeginMenu("Windows"))
 			{
 				ImGui::MenuItem("Skins", nullptr, &g_ui.skinsWindowOpen);
+				ImGui::MenuItem("Animations", nullptr, &g_ui.animationWindowOpen);
 				ImGui::EndMenu();
 			}
 

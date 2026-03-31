@@ -51,17 +51,31 @@ ADD_SRC(LEAMOD_SRC	"Render"					"src/render/gl_shader.hpp"				"src/render/gl_sha
 ADD_SRC(LEAMOD_SRC	"Render"					"src/render/character_renderer.hpp"		"src/render/character_renderer.cpp")
 ADD_SRC(LEAMOD_SRC	"Skeleton"					"src/skeleton.hpp"						"src/skeleton.cpp")
 ADD_SRC(LEAMOD_SRC	"Skin"						"src/skin.hpp"							"src/skin.cpp")
+ADD_SRC(LEAMOD_SRC	"UI"						"src/ui.hpp"							"src/ui.cpp")
 
-add_executable(LeagueModel ${LEAMOD_SRC})
+set(LEAMOD_IMGUI_SRC
+	ext/sokol/ext/imgui/imgui.cpp
+	ext/sokol/ext/imgui/imgui_draw.cpp
+	ext/sokol/ext/imgui/imgui_tables.cpp
+	ext/sokol/ext/imgui/imgui_widgets.cpp
+	ext/sokol/ext/imgui/backends/imgui_impl_glfw.cpp
+	ext/sokol/ext/imgui/backends/imgui_impl_opengl3.cpp
+)
+source_group("ThirdParty\\ImGui" FILES ${LEAMOD_IMGUI_SRC})
+
+add_executable(LeagueModel ${LEAMOD_SRC} ${LEAMOD_IMGUI_SRC})
 target_include_directories(LeagueModel PRIVATE "ext/leaguelib/ext")
 target_include_directories(LeagueModel PRIVATE "ext/leaguelib/ext/glm")
 target_include_directories(LeagueModel PRIVATE "ext")
+target_include_directories(LeagueModel PRIVATE "ext/sokol/ext/imgui")
+target_include_directories(LeagueModel PRIVATE "ext/sokol/ext/imgui/backends")
 target_include_directories(LeagueModel PRIVATE "src")
 
 if (WIN32)
 	target_compile_definitions(LeagueModel PUBLIC WIN32_LEAN_AND_MEAN)
 	target_compile_definitions(LeagueModel PUBLIC NOMINMAX)
 endif ()
+target_compile_definitions(LeagueModel PRIVATE IMGUI_IMPL_OPENGL_LOADER_GLAD)
 
 target_link_libraries(LeagueModel PRIVATE glad glfw OpenGL::GL LeagueLib)
 set_target_properties(LeagueModel PROPERTIES

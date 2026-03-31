@@ -22,6 +22,8 @@
       "includePath": [
         "${workspaceFolder}/src",
         "${workspaceFolder}/ext",
+        "${workspaceFolder}/build/_deps/glad-build/include",
+        "${workspaceFolder}/build/_deps/glfw-src/include",
         "${workspaceFolder}/ext/sokol/inc",
         "${workspaceFolder}/ext/sokol/ext/sokol",
         "${workspaceFolder}/ext/sokol/ext/sokol/util",
@@ -39,6 +41,8 @@
         "path": [
           "${workspaceFolder}/src",
           "${workspaceFolder}/ext",
+          "${workspaceFolder}/build/_deps/glad-build/include",
+          "${workspaceFolder}/build/_deps/glfw-src/include",
           "${workspaceFolder}/ext/sokol/inc",
           "${workspaceFolder}/ext/sokol/ext/sokol",
           "${workspaceFolder}/ext/sokol/ext/sokol/util",
@@ -71,6 +75,8 @@
       "includePath": [
         "${workspaceFolder}/src",
         "${workspaceFolder}/ext",
+        "${workspaceFolder}/build/_deps/glad-build/include",
+        "${workspaceFolder}/build/_deps/glfw-src/include",
         "${workspaceFolder}/ext/sokol/inc",
         "${workspaceFolder}/ext/sokol/ext/sokol",
         "${workspaceFolder}/ext/sokol/ext/sokol/util",
@@ -88,6 +94,8 @@
         "path": [
           "${workspaceFolder}/src",
           "${workspaceFolder}/ext",
+          "${workspaceFolder}/build/_deps/glad-build/include",
+          "${workspaceFolder}/build/_deps/glfw-src/include",
           "${workspaceFolder}/ext/sokol/inc",
           "${workspaceFolder}/ext/sokol/ext/sokol",
           "${workspaceFolder}/ext/sokol/ext/sokol/util",

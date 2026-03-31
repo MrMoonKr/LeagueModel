@@ -8,17 +8,17 @@ namespace LeagueModel
 {
 	uint32_t StringToHash(const std::string& inString);
 
-	void Animation::Load(const std::string& inFilePath, OnLoadFunction inOnLoadFunction)
+	void Animation::Load(const std::string& inFilePath, OnLoadFunction onLoadComplete)
 	{
-		file = Spek::File::Load(inFilePath.c_str(), [this, inOnLoadFunction](Spek::File::Handle inFile)
+		file = Spek::File::Load(inFilePath.c_str(), [this, onLoadComplete](Spek::File::Handle inFile)
 		{
 			auto state = inFile ? inFile->GetLoadState() : Spek::File::LoadState::FailedToLoad;
 			if (state != Spek::File::LoadState::Loaded)
 			{
 				printf("Animation %s.\n", state == Spek::File::LoadState::FailedToLoad ? "failed to load" : "was not found");
 				loadState = state;
-				if (inOnLoadFunction)
-					inOnLoadFunction(*this);
+				if (onLoadComplete)
+					onLoadComplete(*this);
 				return;
 			}
 
@@ -32,8 +32,8 @@ namespace LeagueModel
 				printf("Animation has signature %s, which is not known by this application!\n", (char*)signature);
 
 				loadState = Spek::File::LoadState::FailedToLoad;
-				if (inOnLoadFunction)
-					inOnLoadFunction(*this);
+				if (onLoadComplete)
+					onLoadComplete(*this);
 				return;
 			}
 
@@ -44,8 +44,8 @@ namespace LeagueModel
 			{
 				printf("Animation has an unsupported version: %u\n", version);
 				loadState = Spek::File::LoadState::FailedToLoad;
-				if (inOnLoadFunction)
-					inOnLoadFunction(*this);
+				if (onLoadComplete)
+					onLoadComplete(*this);
 				return;
 			}
 
@@ -56,8 +56,8 @@ namespace LeagueModel
 			{
 				printf("Animation has an unsupported version: %u\n", version);
 				loadState = Spek::File::LoadState::FailedToLoad;
-				if (inOnLoadFunction)
-					inOnLoadFunction(*this);
+				if (onLoadComplete)
+					onLoadComplete(*this);
 				return;
 			}
 
@@ -80,8 +80,8 @@ namespace LeagueModel
 
 			loadState = state;
 			printf("Animation was %s with %llu bones.\n", state == Spek::File::LoadState::FailedToLoad ? "failed to load" : "loaded", bones.size());
-			if (inOnLoadFunction)
-				inOnLoadFunction(*this);
+			if (onLoadComplete)
+				onLoadComplete(*this);
 		});
 	}
 

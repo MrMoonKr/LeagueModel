@@ -5,6 +5,8 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
+#include <imgui.h>
+
 #include <string>
 #include <vector>
 
@@ -59,27 +61,42 @@ namespace LeagueModel
 		virtual void OnEvent() = 0;
 		virtual void OnUpdate(float deltaTime) = 0;
 		virtual void OnRender() = 0;
+		virtual void OnGuiRender();
 		virtual void OnShutdown() = 0;
 
 		void RequestClose();
 		void SetWindowTitle(const std::string& title);
+		bool WantsMouseCapture() const;
+		bool WantsKeyboardCapture() const;
 
 		GLFWwindow* GetWindow() const { return m_window; }
 		const std::vector<AppEvent>& GetEvents() const { return m_events; }
 
 	private:
+		bool InitGui();
+		void ShutdownGui();
+		void BeginGuiFrame();
+		void EndGuiFrame();
+		float QueryWindowScale() const;
+		void UpdateGuiScale(float scale);
+
 		static void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
+		static void CharCallback(GLFWwindow* window, unsigned int codepoint);
 		static void CursorPositionCallback(GLFWwindow* window, double xpos, double ypos);
 		static void MouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
 		static void ScrollCallback(GLFWwindow* window, double xoffset, double yoffset);
 		static void FramebufferSizeCallback(GLFWwindow* window, int width, int height);
+		static void WindowContentScaleCallback(GLFWwindow* window, float xscale, float yscale);
 		static void WindowCloseCallback(GLFWwindow* window);
 
 		void PushEvent(const AppEvent& event);
 
 		GLFWwindow* m_window = nullptr;
 		std::vector<AppEvent> m_events;
+		ImGuiStyle m_baseGuiStyle = {};
 		bool m_initialized = false;
+		bool m_guiInitialized = false;
+		float m_guiScale = 1.0f;
 		bool m_exitRequested = false;
 	};
 }

@@ -1,6 +1,7 @@
 #include "app/league_model_app.hpp"
 
 #include "league_lib/wad/wad_filesystem.hpp"
+#include "ui.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -164,6 +165,9 @@ namespace LeagueModel
 			switch (event.type)
 			{
 			case AppEvent::Type::KeyPressed:
+				if (WantsKeyboardCapture())
+					break;
+
 				if (event.key == GLFW_KEY_ESCAPE)
 					RequestClose();
 				else if (event.key == GLFW_KEY_PAGE_UP)
@@ -174,7 +178,7 @@ namespace LeagueModel
 
 			case AppEvent::Type::MouseButtonPressed:
 				if (event.mouseButton == GLFW_MOUSE_BUTTON_LEFT)
-					m_leftMouseDown = true;
+					m_leftMouseDown = !WantsMouseCapture();
 				break;
 
 			case AppEvent::Type::MouseButtonReleased:
@@ -183,7 +187,7 @@ namespace LeagueModel
 				break;
 
 			case AppEvent::Type::MouseMoved:
-				if (m_hasMousePosition && m_leftMouseDown)
+				if (m_hasMousePosition && m_leftMouseDown && !WantsMouseCapture())
 					m_camera.OnRotate(static_cast<float>(event.x - m_lastMouseX), static_cast<float>(event.y - m_lastMouseY));
 
 				m_lastMouseX = event.x;
@@ -192,7 +196,8 @@ namespace LeagueModel
 				break;
 
 			case AppEvent::Type::MouseScrolled:
-				m_camera.OnZoom(static_cast<float>(event.scrollY));
+				if (!WantsMouseCapture())
+					m_camera.OnZoom(static_cast<float>(event.scrollY));
 				break;
 
 			case AppEvent::Type::FramebufferResized:
@@ -241,6 +246,11 @@ namespace LeagueModel
 			modelMatrix,
 			m_camera.GetViewMatrix(),
 			m_camera.GetProjectionMatrix(aspectRatio));
+	}
+
+	void LeagueModelApp::OnGuiRender()
+	{
+		RenderUI(m_character);
 	}
 
 	void LeagueModelApp::OnShutdown()

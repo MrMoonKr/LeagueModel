@@ -22,6 +22,7 @@ namespace LeagueModel
 		void OnEvent() override;
 		void OnUpdate(float deltaTime) override;
 		void OnRender() override;
+		void OnGuiRender() override;
 		void OnShutdown() override;
 
 	private:
