@@ -13,6 +13,7 @@ import ctypes.util
 import datetime
 import json
 import os
+import re
 import struct
 import threading
 import urllib.error
@@ -54,9 +55,16 @@ XXH64_PRIME4 = 9650029242287828579
 XXH64_PRIME5 = 2870177450012600261
 UINT64_MASK = 0xFFFFFFFFFFFFFFFF
 
+ROOT_DEFAULT = r"\\DESKTOP-GAMA3CK\GameHDD\myGames\Riot Games\League of Legends\Game\DATA\FINAL"
 
 def _format_time_placeholder() -> str:
     return "-"
+
+
+def _get_default_root_dir() -> str:
+    if os.path.isdir(ROOT_DEFAULT):
+        return ROOT_DEFAULT
+    return os.getcwd()
 
 
 def _rotl64(value: int, bits: int) -> int:
@@ -144,6 +152,29 @@ def _sanitize_path_component(value: str) -> str:
     if not value:
         return "_"
     return "".join(character if character not in '<>:"\\|?*' else "_" for character in value)
+
+
+def _try_get_lol_skin_bin_path(file_path: str) -> str | None:
+    normalized = file_path.replace("\\", "/").strip("/").lower()
+    if not normalized.startswith("data/") or not normalized.endswith(".bin"):
+        return None
+
+    relative = normalized[5:]
+    if "/" in relative:
+        return None
+
+    base_name = PurePosixPath(relative).stem
+    champion_match = re.match(r"^([a-z0-9]+)", base_name)
+    if champion_match is None:
+        return None
+
+    skin_indices = re.findall(r"skin(\d+)", base_name)
+    if not skin_indices:
+        return None
+
+    champion = champion_match.group(1)
+    final_skin_num = skin_indices[-1]
+    return f"data/characters/{champion}/skins/skin{final_skin_num}.bin"
 
 
 def _safe_cache_mkdir() -> None:
@@ -395,6 +426,9 @@ class WadRecord:
         haystack = f"{self.path_hash:016x}"
         if self.name:
             haystack += " " + self.name.lower()
+            derived_skin_path = _try_get_lol_skin_bin_path(self.name)
+            if derived_skin_path:
+                haystack += " " + derived_skin_path
         return text in haystack
 
 
@@ -566,7 +600,8 @@ class WadBrowserApp(tk.Tk):
         self.var_filter = tk.StringVar()
         filter_entry = ttk.Entry(top, textvariable=self.var_filter, width=60)
         filter_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        filter_entry.bind("<KeyRelease>", lambda _event: self.apply_filter())
+        filter_entry.bind("<Return>", lambda _event: self.apply_filter())
+        filter_entry.bind("<KP_Enter>", lambda _event: self.apply_filter())
 
         ttk.Button(top, text="Clear", command=self._clear_filter).pack(side=tk.LEFT, padx=(6, 0))
         ttk.Button(top, text="Extract Selected...", command=self.extract_selected).pack(side=tk.LEFT, padx=(12, 0))
@@ -652,6 +687,7 @@ class WadBrowserApp(tk.Tk):
     def open_wad_file(self) -> None:
         wad_paths = filedialog.askopenfilenames(
             title="Select one or more .wad.client files",
+            initialdir=_get_default_root_dir(),
             filetypes=[
                 ("League WAD archives", "*.wad.client *.wad.mobile *.wad"),
                 ("All files", "*.*"),
@@ -667,7 +703,10 @@ class WadBrowserApp(tk.Tk):
         self._load_wad_paths(paths)
 
     def open_folder(self) -> None:
-        folder = filedialog.askdirectory(title="Select folder containing .wad.client files")
+        folder = filedialog.askdirectory(
+            title="Select folder containing .wad.client files",
+            initialdir=_get_default_root_dir(),
+        )
         if not folder:
             return
 
@@ -774,8 +813,52 @@ class WadBrowserApp(tk.Tk):
         file_nodes: dict[str, str] = {}
         file_records: dict[str, list[WadRecord]] = {}
         unresolved_root_id: str | None = None
+        parsed_bin_root_id: str | None = None
+        parsed_bin_prefix_nodes: dict[str, str] = {}
+        parsed_bin_file_nodes: dict[str, str] = {}
+        parsed_bin_file_records: dict[str, list[WadRecord]] = {}
 
         records.sort(key=lambda record: (record.name is None, (record.name or f"{record.path_hash:016x}").lower()))
+
+        def add_record_path(
+            asset_path: str,
+            record: WadRecord,
+            prefix_node_map: dict[str, str],
+            file_node_map: dict[str, str],
+            file_record_map: dict[str, list[WadRecord]],
+            root_id: str = "",
+        ) -> None:
+            path_parts = [part for part in asset_path.split("/") if part]
+            if not path_parts:
+                return
+
+            parent_id = root_id
+            prefix_parts: list[str] = []
+            folder_path_ids: list[str] = [root_id] if root_id else []
+
+            for part in path_parts[:-1]:
+                prefix_parts.append(part)
+                prefix = "/".join(prefix_parts) + "/"
+                node_id = prefix_node_map.get(prefix)
+                if node_id is None:
+                    node_id = self.tree_assets.insert(parent_id, "end", text=part, values=(0,))
+                    prefix_node_map[prefix] = node_id
+                    self._set_asset_scope(node_id, "folder", None)
+                parent_id = node_id
+                folder_path_ids.append(node_id)
+
+            full_path = "/".join(path_parts)
+            leaf_id = file_node_map.get(full_path)
+            if leaf_id is None:
+                leaf_id = self.tree_assets.insert(parent_id, "end", text=path_parts[-1], values=(0,))
+                file_node_map[full_path] = leaf_id
+                file_record_map[full_path] = []
+                self._set_asset_scope(leaf_id, "record", file_record_map[full_path])
+
+            file_record_map[full_path].append(record)
+            for folder_id in folder_path_ids:
+                self._increment_asset_tree_count(folder_id)
+            self._increment_asset_tree_count(leaf_id)
 
         for record in records:
             if not record.name:
@@ -801,34 +884,22 @@ class WadBrowserApp(tk.Tk):
                 self._increment_asset_tree_count(leaf_id)
                 continue
 
-            path_parts = [part for part in record.name.split("/") if part]
-            parent_id = ""
-            prefix_parts: list[str] = []
-            folder_path_ids: list[str] = []
+            add_record_path(record.name, record, prefix_nodes, file_nodes, file_records)
 
-            for part in path_parts[:-1]:
-                prefix_parts.append(part)
-                prefix = "/".join(prefix_parts) + "/"
-                node_id = prefix_nodes.get(prefix)
-                if node_id is None:
-                    node_id = self.tree_assets.insert(parent_id, "end", text=part, values=(0,))
-                    prefix_nodes[prefix] = node_id
-                    self._set_asset_scope(node_id, "folder", None)
-                parent_id = node_id
-                folder_path_ids.append(node_id)
+            derived_skin_path = _try_get_lol_skin_bin_path(record.name)
+            if derived_skin_path and derived_skin_path != record.name.lower():
+                if parsed_bin_root_id is None:
+                    parsed_bin_root_id = self.tree_assets.insert("", "end", text="[parsed .bin]", values=(0,))
+                    self._set_asset_scope(parsed_bin_root_id, "folder", None)
 
-            full_path = "/".join(path_parts)
-            leaf_id = file_nodes.get(full_path)
-            if leaf_id is None:
-                leaf_id = self.tree_assets.insert(parent_id, "end", text=path_parts[-1], values=(0,))
-                file_nodes[full_path] = leaf_id
-                file_records[full_path] = []
-                self._set_asset_scope(leaf_id, "record", file_records[full_path])
-
-            file_records[full_path].append(record)
-            for folder_id in folder_path_ids:
-                self._increment_asset_tree_count(folder_id)
-            self._increment_asset_tree_count(leaf_id)
+                add_record_path(
+                    derived_skin_path,
+                    record,
+                    parsed_bin_prefix_nodes,
+                    parsed_bin_file_nodes,
+                    parsed_bin_file_records,
+                    parsed_bin_root_id,
+                )
 
         for item_id, count in self.asset_tree_counts.items():
             self.tree_assets.item(item_id, values=(count,))
