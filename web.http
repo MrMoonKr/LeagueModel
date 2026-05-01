@@ -5,6 +5,11 @@
 ### 확장 프로그램 테스트용
 GET https://www.google.co.kr
 
+
+###
+GET https://api.github.com/repos/CommunityDragon/Data/contents/hashes/lol
+
+
 ### League of Legends API
 GET https://developer.riotgames.com/docs/lol
 

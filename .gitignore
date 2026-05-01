@@ -2,3 +2,4 @@ cache/champions.json
 build/
 bin/
 config.ini
+imgui.ini
