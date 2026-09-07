@@ -4,6 +4,7 @@
 
 #include <vector>
 #include <map>
+#include <span>
 #include <spek/file/file.hpp>
 
 #define GLM_ENABLE_EXPERIMENTAL
@@ -40,9 +41,11 @@ namespace LeagueModel
 
 		using OnLoadFunction = std::function<void(Animation& animation)>;
 		void Load(const std::string& inFilePath, OnLoadFunction inOnLoadFunction = nullptr);
+		bool LoadPayload(std::span<const std::uint8_t> payload, std::string* error = nullptr);
 		const Bone* GetBone(u32 hash) const;
 
 		Spek::File::LoadState loadState = Spek::File::LoadState::NotLoaded;
+		std::string sourcePath;
 		float fps, duration;
 		std::vector<Bone> bones;
 		std::string name;

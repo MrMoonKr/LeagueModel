@@ -9,6 +9,8 @@
 
 #include <league_lib/bin/bin.hpp>
 
+#include <string>
+
 namespace LeagueModel
 {
 	struct ManagedImage;
@@ -29,7 +31,10 @@ namespace LeagueModel
 		GraphFailed			= 0b010000000000,
 		SkeletonFailed		= 0b100000000000,
 
-		FailedBitSet = InitFailed | SkinFailed | GraphFailed | SkeletonFailed,
+		// An animation graph is optional for rendering a model.  Some current game
+		// assets do not expose one through the skin BIN, but their mesh and skeleton
+		// are still perfectly usable.
+		FailedBitSet = InitFailed | SkinFailed | SkeletonFailed,
 		Loaded = InfoLoadCompleted | MeshGenCompleted | CallbackCompleted | SkinLoaded | GraphLoaded | SkeletonLoaded | SkeletonApplied | MaterialApplied,
 	};
 
@@ -51,7 +56,11 @@ namespace LeagueModel
 			size_t scale = 0;
 		};
 
-		LeagueModel::CharacterLoadState loadState;
+		LeagueModel::CharacterLoadState loadState = CharacterLoadState::NotLoaded;
+		std::string loadError;
+		std::string modelName;
+		std::string skinBinPath;
+		std::string animationGraphPath;
 		std::shared_ptr<ManagedImage> globalTexture;
 		std::unordered_map<u32, std::shared_ptr<ManagedImage>> textures;
 
@@ -72,7 +81,7 @@ namespace LeagueModel
 
 		std::vector<BoneFrameIndexCache> currentFrameCache;
 		glm::vec3 center = glm::vec3(0, 0, 0);
-		u32 loadedSkinBinHash;
+		u32 loadedSkinBinHash = 0;
 
 		using OnMeshLoadFunction = std::function<void(Character& character)>;
 		void Load(const char* inModelName, u8 inSkinIndex, OnMeshLoadFunction inFunction = nullptr);

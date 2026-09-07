@@ -3,6 +3,7 @@
 #include <spek/file/file.hpp>
 #include <glad/glad.h>
 #include <functional>
+#include <string>
 
 namespace LeagueModel
 {
@@ -14,6 +15,7 @@ namespace LeagueModel
 
 		GLuint textureId = 0;
 		Spek::File::LoadState loadState = Spek::File::LoadState::NotLoaded;
+		std::string sourcePath;
 
 	private:
 		Spek::File::Handle file = nullptr;

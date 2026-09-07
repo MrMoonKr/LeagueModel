@@ -1,4 +1,5 @@
 #include "skeleton.hpp"
+#include "assets/skeleton_document.hpp"
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/transform.hpp>
@@ -37,8 +38,59 @@ namespace LeagueModel
 			RecursiveInvertGlobalMatrices(global, *child);
 	}
 
+	bool Skeleton::LoadPayload(std::span<const std::uint8_t> payload, std::string* error)
+	{
+		Assets::SkeletonDocument document;
+		if (!document.Load(payload, error))
+		{
+			state = Spek::File::LoadState::FailedToLoad;
+			return false;
+		}
+		type = static_cast<Type>(document.type);
+		version = document.version;
+		boneIndices = document.boneIndices;
+		bones.clear();
+		bones.resize(document.bones.size());
+		for (size_t index = 0; index < document.bones.size(); ++index)
+		{
+			const Assets::SkeletonBoneInfo& source = document.bones[index];
+			Bone& target = bones[index];
+			target.name = source.name;
+			target.hash = source.hash ? source.hash : StringToHash(source.name);
+			target.id = static_cast<int16_t>(index);
+			target.parentID = source.parentId;
+			if (source.usesLocalTransform)
+			{
+				const glm::vec3 position(source.position[0], source.position[1], source.position[2]);
+				const glm::vec3 scale(source.scale[0], source.scale[1], source.scale[2]);
+				const glm::quat rotation(source.rotation[3], source.rotation[0], source.rotation[1], source.rotation[2]);
+				target.local = glm::translate(position) * glm::mat4_cast(rotation) * glm::scale(scale);
+			}
+			else
+			{
+				target.global = glm::mat4(1.0f);
+				for (int row = 0; row < 3; ++row)
+					for (int column = 0; column < 4; ++column)
+						target.global[column][row] = source.matrix3x4[row * 4 + column];
+				target.inverseGlobal = glm::inverse(target.global);
+			}
+		}
+		for (Bone& bone : bones)
+		{
+			bone.children.clear();
+			bone.parent = bone.parentID >= 0 && static_cast<size_t>(bone.parentID) < bones.size() ? &bones[bone.parentID] : nullptr;
+			if (bone.parent) bone.parent->children.push_back(&bone);
+		}
+		if (document.type == Assets::SkeletonDocument::Type::Version2)
+			for (Bone& bone : bones)
+				if (!bone.parent) RecursiveInvertGlobalMatrices(glm::identity<glm::mat4>(), bone);
+		state = Spek::File::LoadState::Loaded;
+		return true;
+	}
+
 	void Skeleton::Load(const std::string& inFilePath, OnLoadFunction onLoadFunction)
 	{
+		sourcePath = inFilePath;
 		file = Spek::File::Load(inFilePath.c_str(), [onLoadFunction, this](Spek::File::Handle file)
 		{
 			state = file ? file->GetLoadState() : Spek::File::LoadState::FailedToLoad;
@@ -245,20 +297,23 @@ namespace LeagueModel
 		inOffset = boneNamesOffset;
 
 		// Get file part with bone names
-		size_t nameChunkSize = 32 * boneCount;
+		if (inOffset >= inFile->GetData().size()) return Spek::File::LoadState::FailedToLoad;
+		size_t nameChunkSize = inFile->GetData().size() - inOffset;
 		std::vector<uint8_t> start(nameChunkSize);
 		memset(start.data(), 0, nameChunkSize);
 		inFile->Read(start.data(), nameChunkSize, inOffset);
 
 		// Go through all the names and store them on our bones.
 		char* pointer = (char*)start.data();
+		const char* end = pointer + start.size();
 		for (int i = 0; i < boneCount; ++i)
 		{
-			bones[i].name = pointer;
-			size_t nameLength = strlen(pointer);
-			std::string name = pointer;
-			pointer += nameLength;
-			while (*pointer == 0) pointer++; // eat all \0s
+			if (pointer >= end) return Spek::File::LoadState::FailedToLoad;
+			const char* terminator = static_cast<const char*>(memchr(pointer, 0, end - pointer));
+			if (!terminator) return Spek::File::LoadState::FailedToLoad;
+			bones[i].name.assign(pointer, terminator - pointer);
+			pointer += terminator - pointer;
+			while (pointer < end && *pointer == 0) ++pointer;
 		}
 
 		for (auto& bone : bones)

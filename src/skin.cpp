@@ -1,4 +1,5 @@
 #include "skin.hpp"
+#include "assets/skin_document.hpp"
 
 namespace LeagueModel
 {
@@ -28,8 +29,45 @@ namespace LeagueModel
 	{
 	}
 
+	bool Skin::LoadPayload(std::span<const std::uint8_t> payload, std::string* error)
+	{
+		Assets::SkinDocument document;
+		if (!document.Load(payload, error))
+		{
+			loadState = Spek::File::LoadState::FailedToLoad;
+			return false;
+		}
+		majorVersion = document.majorVersion;
+		minorVersion = document.minorVersion;
+		indices = document.indices;
+		vertices.resize(document.vertices.size());
+		for (size_t index = 0; index < document.vertices.size(); ++index)
+		{
+			const Assets::SkinVertex& source = document.vertices[index];
+			Vertex& target = vertices[index];
+			target.position = { source.position[0], source.position[1], source.position[2] };
+			target.boneIndices = { source.boneIndices[0], source.boneIndices[1], source.boneIndices[2], source.boneIndices[3] };
+			target.weights = { source.weights[0], source.weights[1], source.weights[2], source.weights[3] };
+			target.normal = { source.normal[0], source.normal[1], source.normal[2] };
+			target.uv = { source.uv[0], source.uv[1] };
+		}
+		meshes.clear();
+		for (const Assets::SkinMeshRange& source : document.meshes)
+		{
+			Mesh mesh(source.name);
+			mesh.vertexCount = source.vertexCount;
+			mesh.indexCount = source.indexCount;
+			mesh.vertices = vertices.data() + source.vertexOffset;
+			mesh.indices = indices.data() + source.indexOffset;
+			meshes.push_back(std::move(mesh));
+		}
+		loadState = Spek::File::LoadState::Loaded;
+		return true;
+	}
+
 	void Skin::Load(const std::string& inFilePath, OnLoadFunction inOnLoadFunction)
 	{
+		sourcePath = inFilePath;
 		file = Spek::File::Load(inFilePath.c_str(), [this, inOnLoadFunction](Spek::File::Handle inFile, Spek::File::LoadState inLoadState)
 		{
 			if (inLoadState != Spek::File::LoadState::Loaded)

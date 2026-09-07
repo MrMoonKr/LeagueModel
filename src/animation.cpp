@@ -1,4 +1,5 @@
 #include "animation.hpp"
+#include "assets/binary_reader.hpp"
 
 #include <map>
 #include <bitset>
@@ -8,8 +9,63 @@ namespace LeagueModel
 {
 	uint32_t StringToHash(const std::string& inString);
 
+	bool Animation::LoadPayload(std::span<const std::uint8_t> payload, std::string* error)
+	{
+		try
+		{
+			Assets::BinaryReader reader(payload);
+			const auto signature = reader.Read(8);
+			if (std::memcmp(signature.data(), "r3d2anmd", 8) != 0 && std::memcmp(signature.data(), "r3d2canm", 8) != 0) throw std::runtime_error("Unknown ANM signature");
+			const std::uint32_t version = reader.ReadU32();
+			if (version != 4) throw std::runtime_error("Native ANM playback currently supports version 4");
+			reader.Read(16);
+			const std::uint32_t boneCount = reader.ReadU32();
+			const std::uint32_t frameCount = reader.ReadU32();
+			const float frameDelay = reader.ReadF32();
+			if (frameDelay <= 0.0f) throw std::runtime_error("Invalid ANM frame delay");
+			reader.Read(12);
+			auto readOffset = [&reader, &payload]() { return static_cast<size_t>(reader.ReadU32()) + 12; };
+			const size_t translationOffset = readOffset();
+			const size_t rotationOffset = readOffset();
+			const size_t frameOffset = readOffset();
+			if (translationOffset > rotationOffset || rotationOffset > frameOffset || frameOffset > payload.size()) throw std::runtime_error("Invalid ANM v4 table offsets");
+			Assets::BinaryReader translationsReader(payload); translationsReader.Seek(translationOffset);
+			std::vector<glm::vec3> translations;
+			while (translationsReader.Tell() < rotationOffset) translations.push_back({ translationsReader.ReadF32(), translationsReader.ReadF32(), translationsReader.ReadF32() });
+			Assets::BinaryReader rotationsReader(payload); rotationsReader.Seek(rotationOffset);
+			std::vector<glm::quat> rotations;
+			while (rotationsReader.Tell() < frameOffset) { const float x = rotationsReader.ReadF32(), y = rotationsReader.ReadF32(), z = rotationsReader.ReadF32(), w = rotationsReader.ReadF32(); rotations.emplace_back(w, x, y, z); }
+			struct Indices { std::uint16_t translation, scale, rotation; };
+			std::map<std::uint32_t, std::vector<Indices>> frameMap;
+			Assets::BinaryReader framesReader(payload); framesReader.Seek(frameOffset);
+			for (std::uint32_t bone = 0; bone < boneCount; ++bone)
+				for (std::uint32_t frame = 0; frame < frameCount; ++frame)
+				{
+					const auto hash = framesReader.ReadU32();
+					Indices indices{ framesReader.ReadU16(), framesReader.ReadU16(), framesReader.ReadU16() }; framesReader.ReadU16();
+					if (indices.translation >= translations.size() || indices.scale >= translations.size() || indices.rotation >= rotations.size()) throw std::runtime_error("ANM v4 frame index outside table");
+					frameMap[hash].push_back(indices);
+				}
+			bones.clear(); duration = frameDelay * frameCount; fps = 1.0f / frameDelay;
+			for (const auto& [hash, frames] : frameMap)
+			{
+				Bone bone; bone.hash = hash;
+				for (size_t frame = 0; frame < frames.size(); ++frame)
+				{
+					const auto& indices = frames[frame]; const float time = static_cast<float>(frame) * frameDelay;
+					bone.translation.emplace_back(time, translations[indices.translation]); bone.rotation.emplace_back(time, rotations[indices.rotation]); bone.scale.emplace_back(time, translations[indices.scale]);
+				}
+				bones.push_back(std::move(bone));
+			}
+			loadState = Spek::File::LoadState::Loaded;
+			return true;
+		}
+		catch (const std::exception& exception) { bones.clear(); loadState = Spek::File::LoadState::FailedToLoad; if (error) *error = exception.what(); return false; }
+	}
+
 	void Animation::Load(const std::string& inFilePath, OnLoadFunction onLoadComplete)
 	{
+		sourcePath = inFilePath;
 		file = Spek::File::Load(inFilePath.c_str(), [this, onLoadComplete](Spek::File::Handle inFile)
 		{
 			auto state = inFile ? inFile->GetLoadState() : Spek::File::LoadState::FailedToLoad;

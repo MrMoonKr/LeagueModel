@@ -1,5 +1,7 @@
 #include "ui.hpp"
 #include "character.hpp"
+#include "game_hashes.hpp"
+#include "assets/asset_system.hpp"
 
 #include <string>
 #include <cassert>
@@ -7,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <thread>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
@@ -29,7 +32,7 @@ namespace LeagueModel
 	static struct
 	{
 		bool initialisationStarted = false;
-		bool initialised = false;
+		std::atomic<bool> initialised{false};
 
 		nlohmann::json champions;
 		bool skinsWindowOpen = true;
@@ -37,6 +40,8 @@ namespace LeagueModel
 
 		bool animationWindowOpen = true;
 		char animationWindowFilter[256] = { 0 };
+
+		bool assetsWindowOpen = true;
 
 		std::thread thread;
 	} g_ui;
@@ -50,6 +55,11 @@ namespace LeagueModel
 		float progress = 0.0f;
 		std::string phase;
 	};
+
+	static bool IsUiReady()
+	{
+		return g_ui.initialised && AreGameHashesReady();
+	}
 
 	static bool IsCharacterLoadStarted(const Character& character)
 	{
@@ -75,7 +85,7 @@ namespace LeagueModel
 		{
 			result.active = true;
 			result.progress = 1.0f;
-			result.phase = "Load failed";
+			result.phase = character.loadError.empty() ? "Load failed" : "Load failed: " + character.loadError;
 			return result;
 		}
 
@@ -146,7 +156,7 @@ namespace LeagueModel
 	static void RenderLoadingOverlay(const Character& character)
 	{
 		const LoadingProgress characterProgress = GetCharacterLoadingProgress(character);
-		const bool showChampionLoading = !g_ui.initialised;
+		const bool showChampionLoading = !IsUiReady();
 		if (!showChampionLoading && !characterProgress.active)
 			return;
 
@@ -174,7 +184,7 @@ namespace LeagueModel
 			{
 				if (characterProgress.active)
 					ImGui::Separator();
-				ImGui::TextUnformatted("Loading champion list...");
+				ImGui::TextUnformatted(!g_ui.initialised ? "Loading champion list..." : "Loading asset hash list...");
 			}
 		}
 		ImGui::End();
@@ -266,7 +276,8 @@ namespace LeagueModel
 
 	void RenderSkinsWindow(Character& character)
 	{
-		if (g_ui.skinsWindowOpen && ImGui::Begin("Skins", &g_ui.skinsWindowOpen))
+		if (!g_ui.skinsWindowOpen) return;
+		if (ImGui::Begin("Skins", &g_ui.skinsWindowOpen))
 		{
 			ImGui::InputText("Filter", g_ui.skinsWindowFilter, sizeof(g_ui.skinsWindowFilter));
 			if (ImGui::SmallButton("Clear Filter"))
@@ -321,13 +332,14 @@ namespace LeagueModel
 				}
 			}
 
-			ImGui::End();
 		}
+		ImGui::End();
 	}
 
 	void RenderAnimationsWindow(Character& character)
 	{
-		if (g_ui.animationWindowOpen && ImGui::Begin("Animations", &g_ui.animationWindowOpen))
+		if (!g_ui.animationWindowOpen) return;
+		if (ImGui::Begin("Animations", &g_ui.animationWindowOpen))
 		{
 			ImGui::InputText("Filter", g_ui.animationWindowFilter, sizeof(g_ui.animationWindowFilter));
 			if (ImGui::SmallButton("Clear Filter"))
@@ -349,15 +361,189 @@ namespace LeagueModel
 					character.PlayAnimation(animation);
 			}
 
-			ImGui::End();
 		}
+		ImGui::End();
 	}
 
-	void RenderUI(Character& character)
+	static const char* LoadStateLabel(Spek::File::LoadState state)
+	{
+		return state == Spek::File::LoadState::Loaded ? "Loaded" :
+			state == Spek::File::LoadState::NotLoaded ? "Loading" : "Failed";
+	}
+
+	static void RenderTextureAsset(const char* label, const std::shared_ptr<ManagedImage>& texture)
+	{
+		if (texture == nullptr)
+		{
+			ImGui::TextDisabled("%s (not assigned)", label);
+			return;
+		}
+
+		ImGui::PushID(texture.get());
+		const bool open = ImGui::TreeNode(label);
+		ImGui::SameLine();
+		ImGui::TextDisabled("[%s]", LoadStateLabel(texture->loadState));
+		if (open)
+		{
+			ImGui::TextWrapped("%s", texture->sourcePath.c_str());
+			ImGui::Text("OpenGL texture: %u", texture->textureId);
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+
+	static void RenderBoneAsset(const Skeleton::Bone& bone)
+	{
+		ImGui::PushID(&bone);
+		const bool open = ImGui::TreeNodeEx(bone.name.empty() ? "<unnamed bone>" : bone.name.c_str(),
+			bone.children.empty() ? ImGuiTreeNodeFlags_Leaf : ImGuiTreeNodeFlags_None,
+			"%s", bone.name.empty() ? "<unnamed bone>" : bone.name.c_str());
+		ImGui::SameLine();
+		ImGui::TextDisabled("id %d, hash %08X", bone.id, bone.hash);
+		if (open)
+		{
+			for (const Skeleton::Bone* child : bone.children)
+				if (child != nullptr)
+					RenderBoneAsset(*child);
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+
+	static const char* AssetLoadStateLabel(Assets::AssetLoadState state)
+	{
+		switch (state)
+		{
+		case Assets::AssetLoadState::NotLoaded: return "Not loaded";
+		case Assets::AssetLoadState::Loading: return "Loading";
+		case Assets::AssetLoadState::Loaded: return "Loaded";
+		case Assets::AssetLoadState::Partial: return "Partial";
+		case Assets::AssetLoadState::Failed: return "Failed";
+		}
+		return "Unknown";
+	}
+
+	static void RenderNativeLoadRecord(const std::vector<Assets::LoadRecord>& records, size_t index)
+	{
+		const Assets::LoadRecord& record = records[index];
+		std::vector<size_t> children;
+		for (size_t candidate = 0; candidate < records.size(); ++candidate)
+			if (candidate != index && records[candidate].parentId == record.entry.Id()) children.push_back(candidate);
+
+		ImGui::PushID(static_cast<int>(index));
+		const bool open = ImGui::TreeNodeEx(record.entry.path.ToString().c_str(), children.empty() ? ImGuiTreeNodeFlags_Leaf : ImGuiTreeNodeFlags_None);
+		ImGui::SameLine();
+		ImGui::TextDisabled("%s", AssetLoadStateLabel(record.state));
+		if (open)
+		{
+			ImGui::Text("Bytes: %llu", static_cast<unsigned long long>(record.entry.fileSize));
+			if (!record.error.empty()) ImGui::TextWrapped("Detail: %s", record.error.c_str());
+			for (const size_t child : children) RenderNativeLoadRecord(records, child);
+			ImGui::TreePop();
+		}
+		ImGui::PopID();
+	}
+
+	static void RenderAssetsWindow(Character& character, const Assets::AssetSystem* assetSystem)
+	{
+		if (!g_ui.assetsWindowOpen)
+			return;
+
+		if (!ImGui::Begin("Assets", &g_ui.assetsWindowOpen))
+		{
+			ImGui::End();
+			return;
+		}
+
+		if (!IsCharacterLoadStarted(character) && (assetSystem == nullptr || assetSystem->LoadRecords().empty()))
+		{
+			ImGui::TextUnformatted("No character assets have been requested yet.");
+			ImGui::End();
+			return;
+		}
+
+		ImGui::Text("Character: %s", character.modelName.empty() ? "Loading..." : character.modelName.c_str());
+		ImGui::Separator();
+		if (assetSystem != nullptr && ImGui::TreeNode("Native load records"))
+		{
+			const auto& records = assetSystem->LoadRecords();
+			if (records.empty())
+				ImGui::TextUnformatted("No native asset reads have been requested.");
+			for (size_t index = 0; index < records.size(); ++index)
+			{
+				const std::string& parentId = records[index].parentId;
+				const bool parentExists = std::any_of(records.begin(), records.end(), [&parentId](const Assets::LoadRecord& candidate) { return candidate.entry.Id() == parentId; });
+				if (parentId.empty() || !parentExists) RenderNativeLoadRecord(records, index);
+			}
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Source files"))
+		{
+			ImGui::TextWrapped("Skin BIN: %s", character.skinBinPath.empty() ? "Pending" : character.skinBinPath.c_str());
+			ImGui::TextWrapped("Animation graph: %s", character.animationGraphPath.empty() ? "Not available" : character.animationGraphPath.c_str());
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Mesh"))
+		{
+			ImGui::TextWrapped("%s", character.skin.sourcePath.empty() ? "Pending" : character.skin.sourcePath.c_str());
+			ImGui::Text("%zu vertices, %zu indices, %zu submeshes", character.skin.vertices.size(), character.skin.indices.size(), character.skin.meshes.size());
+			for (const Skin::Mesh& mesh : character.skin.meshes)
+				ImGui::BulletText("%s — %zu vertices, %zu indices%s", mesh.name.c_str(), mesh.vertexCount, mesh.indexCount, mesh.initialVisibility ? "" : " (hidden)");
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Textures"))
+		{
+			RenderTextureAsset("Global", character.globalTexture);
+			for (const auto& [meshHash, texture] : character.textures)
+			{
+				char label[48];
+				snprintf(label, sizeof(label), "Submesh %08X", meshHash);
+				RenderTextureAsset(label, texture);
+			}
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Skeleton"))
+		{
+			ImGui::TextWrapped("%s", character.skeleton.sourcePath.empty() ? "Pending" : character.skeleton.sourcePath.c_str());
+			ImGui::Text("%zu bones (%s)", character.skeleton.bones.size(), LoadStateLabel(character.skeleton.state));
+			for (const Skeleton::Bone& bone : character.skeleton.bones)
+				if (bone.parent == nullptr)
+					RenderBoneAsset(bone);
+			ImGui::TreePop();
+		}
+
+		if (ImGui::TreeNode("Animations"))
+		{
+			ImGui::Text("%zu loaded clips, %zu graph clips", character.animations.size(), character.graph.clips.size());
+			for (const auto& [path, animation] : character.animations)
+			{
+				ImGui::PushID(animation.get());
+				const bool open = ImGui::TreeNode(path.c_str());
+				if (open)
+				{
+					ImGui::Text("%s", LoadStateLabel(animation->loadState));
+					ImGui::TextWrapped("%s", animation->sourcePath.c_str());
+					ImGui::Text("%.2f FPS, %.2f seconds, %zu animated bones", animation->fps, animation->duration, animation->bones.size());
+					ImGui::TreePop();
+				}
+				ImGui::PopID();
+			}
+			ImGui::TreePop();
+		}
+
+		ImGui::End();
+	}
+
+	void RenderUI(Character& character, const Assets::AssetSystem* assetSystem)
 	{
 		if (!g_ui.initialised && !g_ui.initialisationStarted)
 		{
 			RequestChampionList();
+			RequestGameHashes();
 
 			g_ui.initialisationStarted = true;
 		}
@@ -373,6 +559,7 @@ namespace LeagueModel
 			{
 				ImGui::MenuItem("Skins", nullptr, &g_ui.skinsWindowOpen);
 				ImGui::MenuItem("Animations", nullptr, &g_ui.animationWindowOpen);
+				ImGui::MenuItem("Assets", nullptr, &g_ui.assetsWindowOpen);
 				ImGui::EndMenu();
 			}
 
@@ -381,21 +568,22 @@ namespace LeagueModel
 				ImGui::Separator();
 				ImGui::Text("Loading %d%%", static_cast<int>(characterProgress.progress * 100.0f + 0.5f));
 			}
-			else if (!g_ui.initialised)
+			else if (!IsUiReady())
 			{
 				ImGui::Separator();
-				ImGui::TextUnformatted("Loading champion list...");
+				ImGui::TextUnformatted(!g_ui.initialised ? "Loading champion list..." : "Loading asset hash list...");
 			}
 
 			ImGui::TextColored(ImVec4(1, 1, 1, 0.4), "FPS: %.1f", ImGui::GetIO().Framerate);
 			ImGui::EndMainMenuBar();
 		}
 
-		if (g_ui.initialised)
+		if (IsUiReady())
 		{
 			RenderSkinsWindow(character);
 			RenderAnimationsWindow(character);
 		}
+		RenderAssetsWindow(character, assetSystem);
 
 		RenderLoadingOverlay(character);
 	}

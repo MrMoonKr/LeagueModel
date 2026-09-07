@@ -2,11 +2,22 @@
 
 #include "league_lib/wad/wad_filesystem.hpp"
 #include "ui.hpp"
+#include "assets/game_hash_index.hpp"
+#include "assets/bin_document.hpp"
+#include "assets/character_asset_resolver.hpp"
+#include "assets/animation_graph_resolver.hpp"
+#include "assets/skin_document.hpp"
+#include "assets/skeleton_document.hpp"
+#include "assets/texture_document.hpp"
+#include "assets/static_character_loader.hpp"
+#include "assets/anm_document.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <stdexcept>
 
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/transform.hpp>
@@ -17,23 +28,25 @@ namespace LeagueModel
 
 	namespace
 	{
-		void MountDir(const char* wadPath)
+		LeagueLib::WADFileSystem* MountDir(const char* wadPath)
 		{
 			if (wadPath == nullptr || !fs::exists(wadPath))
-				return;
+				return nullptr;
 
 			const fs::path rootPath = wadPath;
+			if (fs::is_directory(rootPath / "Champions"))
+				return Spek::File::Mount<LeagueLib::WADFileSystem>((rootPath / "Champions").generic_string().c_str());
+			if (rootPath.filename() == "Champions")
+				return Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.generic_string().c_str());
 			if (fs::is_regular_file(rootPath) && rootPath.filename() == "DATA.wad.client")
 			{
-				Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.parent_path().string().c_str());
-				return;
+				return Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.parent_path().string().c_str());
 			}
 
 			const fs::path directWadPath = rootPath / "DATA.wad.client";
 			if (fs::exists(directWadPath) && fs::is_regular_file(directWadPath))
 			{
-				Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.string().c_str());
-				return;
+				return Spek::File::Mount<LeagueLib::WADFileSystem>(rootPath.string().c_str());
 			}
 
 			for (auto& path : fs::recursive_directory_iterator(rootPath))
@@ -43,10 +56,11 @@ namespace LeagueModel
 
 				if (path.path().filename() == "DATA.wad.client")
 				{
-					Spek::File::Mount<LeagueLib::WADFileSystem>(path.path().parent_path().string().c_str());
-					return;
+					return Spek::File::Mount<LeagueLib::WADFileSystem>(path.path().parent_path().string().c_str());
 				}
 			}
+
+			return nullptr;
 		}
 
 		std::string Trim(const std::string& value)
@@ -143,19 +157,158 @@ namespace LeagueModel
 
 		m_gameRootPath = ResolveGameRoot(m_argc, m_argv);
 		MountConfiguredRoots();
+		InitializeNativeAssetPreview();
 		m_camera.SetDistance(400.0f);
-		m_character.Load("Jinx", 0);
 		return true;
 	}
 
-	void LeagueModelApp::MountConfiguredRoots() const
+	void LeagueModelApp::MountConfiguredRoots()
 	{
 		if (!m_gameRootPath.empty() && fs::exists(m_gameRootPath))
-			MountDir(m_gameRootPath.c_str());
+			m_wadFileSystem = MountDir(m_gameRootPath.c_str());
 
 		const fs::path localDirectory = fs::current_path();
-		if (fs::exists(localDirectory))
-			MountDir(localDirectory.string().c_str());
+		if (m_wadFileSystem == nullptr && fs::exists(localDirectory))
+			m_wadFileSystem = MountDir(localDirectory.string().c_str());
+	}
+
+	void LeagueModelApp::InitializeNativeAssetPreview()
+	{
+		if (m_gameRootPath.empty())
+			return;
+
+		std::string error;
+		m_nativeHashIndex.Load(fs::current_path() / "cache" / "hashes.game.txt", &error);
+		const fs::path jinxWad = fs::path(m_gameRootPath) / "Champions" / "Jinx.wad.client";
+		if (!fs::is_regular_file(jinxWad))
+			return;
+
+		try
+		{
+			m_nativeAssets.MountWad(jinxWad, m_nativeHashIndex.Size() ? &m_nativeHashIndex : nullptr, "Jinx");
+			m_nativeAssets.Open();
+			Assets::StaticCharacterAssets staticAssets;
+			if (!Assets::LoadStaticCharacterAssets(m_nativeAssets, "Jinx", 0, m_nativeHashIndex, staticAssets, &error))
+			{
+				if (const auto* entry = m_nativeAssets.GetEntry("data/characters/jinx/skins/skin0.bin"))
+					m_nativeAssets.MarkPartial(*entry, "Static asset pipeline: " + error);
+			}
+			const auto* idleAnimation = m_nativeAssets.GetEntry("assets/characters/jinx/skins/base/animations/jinx_minigun_idle1.anm");
+			if (idleAnimation != nullptr)
+			{
+				const auto& payload = m_nativeAssets.ReadPayload(*idleAnimation);
+				Assets::AnmDocument animation;
+				std::string animationError;
+				if (!animation.Load(payload, &animationError))
+					m_nativeAssets.MarkPartial(*idleAnimation, "ANM decode: " + animationError);
+				else if (!animation.metadataComplete && animation.version != 4)
+					m_nativeAssets.MarkPartial(*idleAnimation, "ANM keyframe metadata is not yet supported for version " + std::to_string(animation.version));
+				if (animation.version == 4)
+				{
+					auto playable = std::make_shared<Animation>();
+					if (playable->LoadPayload(payload, &animationError))
+					{
+						playable->name = "[Native] Jinx Minigun Idle";
+						playable->sourcePath = idleAnimation->path.path;
+						m_nativeAnimationPreview = std::move(playable);
+					}
+					else m_nativeAssets.MarkPartial(*idleAnimation, "ANM playback conversion: " + animationError);
+				}
+			}
+			const auto* skinBin = m_nativeAssets.GetEntry("data/characters/jinx/skins/skin0.bin");
+			if (skinBin == nullptr)
+				return;
+
+			const auto& rawBin = m_nativeAssets.InspectRaw(*skinBin);
+			Assets::BinDocument skinDocument;
+			if (!skinDocument.Load(rawBin.payload, &error))
+			{
+				m_nativeAssets.MarkPartial(*skinBin, "BIN header: " + error);
+				return;
+			}
+
+			Assets::SkinAssetReferences references;
+			if (!Assets::ResolveSkinAssets(skinDocument, "Jinx", 0, m_nativeHashIndex, references, &error))
+			{
+				m_nativeAssets.MarkPartial(*skinBin, "Skin references: " + error);
+				return;
+			}
+
+			const std::string parentId = skinBin->Id();
+			auto readReference = [this, &parentId](const std::string& path)
+			{
+				if (const auto* entry = m_nativeAssets.GetEntry(path))
+				{
+					const auto& payload = m_nativeAssets.ReadPayload(*entry, parentId);
+					if (path.ends_with(".skn"))
+					{
+						Assets::SkinDocument skin;
+						std::string skinError;
+						if (!skin.Load(payload, &skinError))
+							m_nativeAssets.MarkPartial(*entry, "SKN decode: " + skinError, parentId);
+						else
+						{
+							Skin renderSkin;
+							if (!renderSkin.LoadPayload(payload, &skinError))
+								m_nativeAssets.MarkPartial(*entry, "SKN render conversion: " + skinError, parentId);
+						}
+					}
+					else if (path.ends_with(".skl"))
+					{
+						Assets::SkeletonDocument skeleton;
+						std::string skeletonError;
+						if (!skeleton.Load(payload, &skeletonError))
+							m_nativeAssets.MarkPartial(*entry, "SKL decode: " + skeletonError, parentId);
+						else if (!skeleton.hierarchyComplete)
+							m_nativeAssets.MarkPartial(*entry, "SKL hierarchy contains unsupported parent values", parentId);
+						else
+						{
+							Skeleton renderSkeleton;
+							if (!renderSkeleton.LoadPayload(payload, &skeletonError))
+								m_nativeAssets.MarkPartial(*entry, "SKL render conversion: " + skeletonError, parentId);
+						}
+					}
+					else if (path.ends_with("/animations/skin0.bin"))
+					{
+						Assets::BinDocument graphDocument;
+						std::string graphError;
+						if (!graphDocument.Load(payload, &graphError))
+						{
+							m_nativeAssets.MarkPartial(*entry, "Animation graph header: " + graphError, parentId);
+						}
+						else
+						{
+							Assets::AnimationGraphAssets graph;
+							if (!Assets::ResolveAnimationGraphAssets(graphDocument, "Jinx", 0, m_nativeHashIndex, graph, &graphError))
+								m_nativeAssets.MarkPartial(*entry, "Animation graph values: " + graphError, parentId);
+						}
+					}
+					else if (path.ends_with(".tex") || path.ends_with(".dds"))
+					{
+						Assets::TextureDocument texture;
+						std::string textureError;
+						if (!texture.Load(payload, &textureError))
+							m_nativeAssets.MarkPartial(*entry, "Texture decode: " + textureError, parentId);
+					}
+					return;
+				}
+				Assets::AssetEntry unresolved;
+				unresolved.path.path = path;
+				m_nativeAssets.MarkPartial(unresolved, "Referenced file is not in mounted archives", parentId);
+			};
+			readReference(references.skinMeshPath);
+			readReference(references.skeletonPath);
+			readReference(references.texturePath);
+			if (references.animationGraphHash)
+			{
+				if (const std::string* graphPath = m_nativeHashIndex.Lookup(*references.animationGraphHash))
+					readReference(*graphPath);
+			}
+		}
+		catch (const std::exception&)
+		{
+			// Keep the native failure record available to the Assets panel.
+		}
 	}
 
 	void LeagueModelApp::OnEvent()
@@ -217,11 +370,37 @@ namespace LeagueModel
 	void LeagueModelApp::OnUpdate(float deltaTime)
 	{
 		Spek::File::Update();
+		if (!m_initialCharacterLoadRequested && m_wadFileSystem != nullptr && m_wadFileSystem->IsIndexed())
+		{
+			m_initialCharacterLoadRequested = true;
+			m_character.Load("Jinx", 0);
+		}
 		RefreshAnimationList();
 
 		m_character.currentTime += deltaTime;
+		if (!m_nativeAnimationInjected && m_nativeAnimationPreview != nullptr && (m_character.loadState & CharacterLoadState::Loaded) == CharacterLoadState::Loaded)
+		{
+			m_character.animations.emplace(m_nativeAnimationPreview->name, m_nativeAnimationPreview);
+			m_nativeAnimationInjected = true;
+		}
 		m_character.Update(m_pose);
 		m_renderer.EnsureUploaded(m_character);
+		if (m_argc > 2 && std::strcmp(m_argv[2], "--smoke") == 0)
+		{
+			static int frames = 0;
+			static int champion = 0;
+			static const char* names[] = { "Jinx", "Ahri", "Kassadin", "Jinx" };
+			if ((m_character.loadState & CharacterLoadState::FailedBitSet) != 0)
+				throw std::runtime_error("SMOKE load failure: " + m_character.loadError);
+			if (m_renderer.IsReady() && (m_character.loadState & CharacterLoadState::Loaded) == CharacterLoadState::Loaded && ++frames >= 10)
+			{
+				printf("VIEWER_CHECK %s vertices=%zu bones=%zu animations=%zu gl_error=%u\n", names[champion], m_character.skin.vertices.size(), m_character.skeleton.bones.size(), m_character.animations.size(), glGetError());
+				fflush(stdout);
+				frames = 0;
+				if (++champion == 4) RequestClose();
+				else m_character.Load(names[champion], 0);
+			}
+		}
 		UpdateWindowTitle();
 	}
 
@@ -250,7 +429,7 @@ namespace LeagueModel
 
 	void LeagueModelApp::OnGuiRender()
 	{
-		RenderUI(m_character);
+		RenderUI(m_character, &m_nativeAssets);
 	}
 
 	void LeagueModelApp::OnShutdown()
@@ -339,7 +518,8 @@ namespace LeagueModel
 
 	void LeagueModelApp::UpdateWindowTitle()
 	{
-		std::string title = "LeagueModel - Jinx";
+		const std::string characterName = m_character.modelName.empty() ? "Jinx" : m_character.modelName;
+		std::string title = "LeagueModel - " + characterName;
 
 		if ((m_character.loadState & CharacterLoadState::FailedBitSet) != 0)
 		{

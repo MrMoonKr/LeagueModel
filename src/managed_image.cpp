@@ -52,6 +52,7 @@ namespace LeagueModel
 
 	ManagedImage::ManagedImage(const char* path, OnLoadFunction onImageLoaded)
 	{
+		sourcePath = path ? path : "";
 		file = Spek::File::Load(path, [this, onImageLoaded](Spek::File::Handle f)
 		{
 			std::string fileName = f ? f->GetName() : "unknown";

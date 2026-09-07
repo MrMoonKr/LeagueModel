@@ -1,5 +1,6 @@
 #include "animation.hpp"
 #include "character.hpp"
+#include "game_hashes.hpp"
 #include "managed_image.hpp"
 
 #include "league_lib/bin/bin.hpp"
@@ -10,6 +11,7 @@
 #include <ranges>
 #include <string_view>
 #include <algorithm>
+#include <cctype>
 #include <set>
 
 namespace LeagueModel
@@ -26,13 +28,55 @@ namespace LeagueModel
 	void TryLoadMeshInfo(Character& character, Character::OnMeshLoadFunction onMeshLoaded, const LeagueLib::Bin& skinBin, const LeagueLib::BinVariable& base);
 	void TryGenerateMesh(Character& character, Character::OnMeshLoadFunction onMeshLoaded, const LeagueLib::Bin& skinBin);
 	void FinishLoad(Character& character, Character::OnMeshLoadFunction onMeshLoaded);
+	static std::string AssetPath(const LeagueLib::BinVariable& value)
+	{
+		if (const auto* text = value.As<std::string>()) return *text;
+		if (const auto* hash = value.As<u64>())
+		{
+			if (const std::string* resolved = LookupGameHash(*hash))
+				return *resolved;
+
+			char path[40];
+			snprintf(path, sizeof(path), "@wad/%016llx", static_cast<unsigned long long>(*hash));
+			return path;
+		}
+		return {};
+	}
+
+	static std::string GetAnimationGraphLookupPath(const std::string& linkedFile)
+	{
+		std::string path = linkedFile;
+		std::replace(path.begin(), path.end(), '\\', '/');
+
+		constexpr std::string_view dataPrefix = "data/";
+		if (path.size() >= dataPrefix.size() &&
+			std::equal(dataPrefix.begin(), dataPrefix.end(), path.begin(), [](char expected, char actual)
+			{
+				return std::tolower(static_cast<unsigned char>(expected)) == std::tolower(static_cast<unsigned char>(actual));
+			}))
+		{
+			path.erase(0, dataPrefix.size());
+		}
+
+		constexpr std::string_view binExtension = ".bin";
+		if (path.size() >= binExtension.size() &&
+			std::equal(binExtension.rbegin(), binExtension.rend(), path.rbegin(), [](char expected, char actual)
+			{
+				return std::tolower(static_cast<unsigned char>(expected)) == std::tolower(static_cast<unsigned char>(actual));
+			}))
+		{
+			path.resize(path.size() - binExtension.size());
+		}
+
+		return path;
+	}
 
 	void Character::Load(const char* modelName, u8 skinIndex, OnMeshLoadFunction onMeshLoaded)
 	{
 		std::string charName = modelName;
 		std::string skinBinFile = "data/characters/" + charName + "/skins/skin" + std::to_string(skinIndex) + ".bin";
 
-		if (loadedSkinBinHash == FNV1Hash(skinBinFile))
+		if (loadedSkinBinHash == FNV1Hash(skinBinFile) && (loadState & CharacterLoadState::FailedBitSet) == 0)
 			return;
 
 		g_bins[skinBinFile].Load(skinBinFile.c_str(), [this, skinBinFile, charName, skinIndex, onMeshLoaded](const LeagueLib::Bin& skinBin)
@@ -40,13 +84,22 @@ namespace LeagueModel
 			if (skinBin.GetLoadState() != File::LoadState::Loaded)
 			{
 				loadState = CharacterLoadState::InitFailed;
+				loadError = skinBin.GetLastError().empty() ? "Unable to load skin BIN" : skinBin.GetLastError();
 				return;
 			}
 
 			Reset();
+			this->modelName = charName;
+			this->skinBinPath = skinBinFile;
 			loadedSkinBinHash = FNV1Hash(skinBinFile);
 
 			const auto& base = skinBin["Characters/" + charName + "/Skins/Skin" + std::to_string(skinIndex)];
+			if (skinBin.GetLoadState() != File::LoadState::Loaded)
+			{
+				loadState = CharacterLoadState::InitFailed;
+				loadError = skinBin.GetLastError();
+				return;
+			}
 			LoadMeshProperties(skinBin, charName, skinIndex, *this, onMeshLoaded, base);
 
 			// If it's a chroma, we have to use the parent's animation files
@@ -54,24 +107,35 @@ namespace LeagueModel
 
 			// Try to find the animation bin path
 			std::string animBinPath;
-			const u32* hash = base["skinAnimationProperties"]["animationGraphData"].As<u32>();
-			for (auto& linkedFile : skinBin.GetLinkedFiles())
+			const u32* graphHash = base["skinAnimationProperties"]["animationGraphData"].As<u32>();
+			if (graphHash != nullptr)
 			{
-				size_t extOffset = linkedFile.find_last_of(".bin");
-				std::string fileCutOff = linkedFile.substr(strlen("DATA/"), extOffset - strlen("DATA/.bin") + 1);
-				auto linkedHash = FNV1Hash(fileCutOff);
-				if (linkedHash == *hash)
+				for (const auto& linkedFile : skinBin.GetLinkedFiles())
 				{
-					animBinPath = linkedFile;
-					break;
+					if (FNV1Hash(GetAnimationGraphLookupPath(linkedFile)) == *graphHash)
+					{
+						animBinPath = linkedFile;
+						break;
+					}
 				}
+			}
+
+			if (animBinPath.empty())
+			{
+				printf("No animation graph found for %s skin %u; loading the static model.\n", charName.c_str(), skinIndex);
+				(u64&)loadState |= CharacterLoadState::GraphFailed;
+				(u64&)loadState |= CharacterLoadState::GraphLoaded;
+				CheckLoad(*this, onMeshLoaded, skinBin, base);
+				return;
 			}
 
 			g_bins[animBinPath].Load(animBinPath, [&skinBin, this, skinParent, onMeshLoaded, charName, base](LeagueLib::Bin& animBin)
 			{
+				this->animationGraphPath = animBin.GetFileName();
 				if (animBin.GetLoadState() != File::LoadState::Loaded)
 				{
 					(u64&)loadState |= (u64)CharacterLoadState::GraphFailed;
+					(u64&)loadState |= (u64)CharacterLoadState::GraphLoaded;
 					CheckLoad(*this, onMeshLoaded, skinBin, base);
 					return;
 				}
@@ -93,6 +157,7 @@ namespace LeagueModel
 					{
 						printf("Failed to parse skin parent from animation file %s\n", fileName.c_str());
 						(u64&)loadState |= (u64)CharacterLoadState::GraphFailed;
+						(u64&)loadState |= (u64)CharacterLoadState::GraphLoaded;
 						CheckLoad(*this, onMeshLoaded, skinBin, base);
 						return;
 					}
@@ -101,6 +166,7 @@ namespace LeagueModel
 					{
 						printf("Failed to get animation graph root from animation file %s\n", fileName.c_str());
 						(u64&)loadState |= (u64)CharacterLoadState::GraphFailed;
+						(u64&)loadState |= (u64)CharacterLoadState::GraphLoaded;
 						CheckLoad(*this, onMeshLoaded, skinBin, base);
 						return;
 					}
@@ -120,7 +186,7 @@ namespace LeagueModel
 				std::set<AnimClipPair*> animations;
 				for (auto& clipInfo : graph.clips)
 				{
-					if (clipInfo.second->Type == AnimationClipType::Atomic)
+				if (clipInfo.second && clipInfo.second->Type == AnimationClipType::Atomic)
 					{
 						const AnimationAtomicClipData& clip = *(const AnimationAtomicClipData*)clipInfo.second.get();
 						auto path = clip.mAnimationResourceData.mAnimationFilePath;
@@ -192,9 +258,8 @@ namespace LeagueModel
 			bool isTexture = !!strstr(samplerName->c_str(), "Texture") || !!strstr(samplerName->c_str(), "texture");
 			if (isDiffuse && isTexture)
 			{
-				const std::string* origPath = samplerValue["textureName"].As<std::string>();
-				if (origPath)
-					return std::make_shared<ManagedImage>(origPath->c_str(), onLoad);
+				const auto path = AssetPath(samplerValue["textureName"]);
+				if (!path.empty()) return std::make_shared<ManagedImage>(path.c_str(), onLoad);
 			}
 		}
 
@@ -207,9 +272,8 @@ namespace LeagueModel
 			bool isDiffuse = !!strstr(samplerName->c_str(), "Diffuse") || !!strstr(samplerName->c_str(), "diffuse");
 			if (isDiffuse)
 			{
-				const std::string* origPath = samplerValue["textureName"].As<std::string>();
-				if (origPath)
-					return std::make_shared<ManagedImage>(origPath->c_str(), onLoad);
+				const auto path = AssetPath(samplerValue["textureName"]);
+				if (!path.empty()) return std::make_shared<ManagedImage>(path.c_str(), onLoad);
 			}
 		}
 
@@ -221,7 +285,8 @@ namespace LeagueModel
 		const auto& properties = base["skinMeshProperties"];
 		const std::string* skeletonFileName = properties["skeleton"].As<std::string>();
 		const std::string* skinFileName		= properties["simpleSkin"].As<std::string>();
-		const std::string* textureFileName  = properties["texture"].As<std::string>();
+		const std::string texturePath = AssetPath(properties["texture"]);
+		const std::string* textureFileName = texturePath.empty() ? nullptr : &texturePath;
 
 		if (skeletonFileName == nullptr || skinFileName == nullptr)
 		{
@@ -414,6 +479,7 @@ namespace LeagueModel
 		}
 
 		character.meshes.clear();
+		character.meshes.reserve(character.skin.meshes.size());
 		character.meshMap.clear();
 		for (const Skin::Mesh& sourceMesh : character.skin.meshes)
 		{
@@ -458,6 +524,10 @@ namespace LeagueModel
 	void Character::Reset()
 	{
 		(u64&)loadState = 0;
+		loadError.clear();
+		modelName.clear();
+		skinBinPath.clear();
+		animationGraphPath.clear();
 		globalTexture = nullptr;
 		textures.clear();
 		loadedSkinBinHash = 0;

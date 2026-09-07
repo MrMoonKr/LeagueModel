@@ -3,6 +3,7 @@
 #include "types.hpp"
 
 #include <vector>
+#include <span>
 #include <glm/mat4x4.hpp>
 #include <spek/file/file.hpp>
 
@@ -34,6 +35,7 @@ namespace LeagueModel
 		};
 
 		Spek::File::LoadState state = Spek::File::LoadState::NotLoaded;
+		std::string sourcePath;
 		Type type;
 		uint32_t version;
 		std::vector<Bone> bones;
@@ -41,6 +43,7 @@ namespace LeagueModel
 
 		using OnLoadFunction = std::function<void(LeagueModel::Skeleton& inSkeleton)>;
 		void Load(const std::string& inFilePath, OnLoadFunction inOnLoadFunction = nullptr);
+		bool LoadPayload(std::span<const std::uint8_t> payload, std::string* error = nullptr);
 
 		const Skeleton::Bone* GetBone(u32 inNameHash) const;
 

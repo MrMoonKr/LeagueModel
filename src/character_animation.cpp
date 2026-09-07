@@ -1,6 +1,7 @@
 #include "animation_graph.hpp"
 #include "character_animation.hpp"
 #include "character.hpp"
+#include "game_hashes.hpp"
 
 #include <fnv1.hpp>
 
@@ -215,7 +216,21 @@ namespace LeagueModel
 			return;
 		}
 
-		inTarget = *inSource->As<std::string>();
+		if (const auto* text = inSource->As<std::string>())
+			inTarget = *text;
+		else if (const auto* path = inSource->As<u64>())
+		{
+			if (const std::string* resolved = LookupGameHash(*path))
+			{
+				inTarget = *resolved;
+				return;
+			}
+
+			char buffer[40];
+			snprintf(buffer, sizeof(buffer), "@wad/%016llx", static_cast<unsigned long long>(*path));
+			inTarget = buffer;
+		}
+		else inTarget.clear();
 	}
 
 	void LoadBinData(i8& inTarget, const BinVariable* inSource, i8 inDefault) { return LoadNumberBinData<i8>(inTarget, inSource, inDefault); }

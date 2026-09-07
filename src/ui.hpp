@@ -3,5 +3,6 @@
 namespace LeagueModel
 {
 	struct Character;
-	void RenderUI(Character& character);
+	namespace Assets { class AssetSystem; }
+	void RenderUI(Character& character, const Assets::AssetSystem* assetSystem = nullptr);
 }

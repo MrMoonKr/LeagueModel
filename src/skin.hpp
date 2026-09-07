@@ -4,6 +4,7 @@
 
 #include <glm/glm.hpp>
 #include <spek/file/file.hpp>
+#include <span>
 
 namespace LeagueModel
 {
@@ -43,8 +44,10 @@ namespace LeagueModel
 
 		using OnLoadFunction = std::function<void(Skin& skin)>;
 		void Load(const std::string& inFilePath, OnLoadFunction inOnLoadFunction = nullptr);
+		bool LoadPayload(std::span<const std::uint8_t> payload, std::string* error = nullptr);
 
 		Spek::File::LoadState loadState = Spek::File::LoadState::NotLoaded;
+		std::string sourcePath;
 
 		u16 majorVersion;
 		u16 minorVersion;
